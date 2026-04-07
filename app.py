@@ -2,69 +2,85 @@ import streamlit as st
 import pandas as pd
 import requests
 import random
-from datetime import datetime, timedelta
+from datetime import datetime
 
-st.set_page_config(page_title="EdgeBet AI", layout="wide", page_icon="⚽")
+st.set_page_config(page_title="EdgeBet AI - Gerçek Oranlar", layout="wide", page_icon="⚽")
 
 st.title("⚽ EdgeBet AI")
-st.markdown("**Gerçekçi Oranlar • Mantıklı AI • Nesine/Tuttur Tarzı**")
+st.markdown("**Gerçek Oranlar (The Odds API) • Gelişmiş AI • 1xBet Tarzı Kuponlar**")
 
-api_key = st.secrets.get("API_FOOTBALL_KEY")
-headers = {'x-apisports-key': api_key} if api_key else None
+api_key = st.secrets.get("ODDS_API_KEY")
+if not api_key:
+    st.error("❌ The Odds API Key bulunamadı! Secrets'a ODDS_API_KEY ekleyin.")
+    st.stop()
 
-# ====================== GERÇEKÇİ DEMO + API ======================
-@st.cache_data(ttl=180)
-def getir_maclari():
-    # Önce gerçek API'yi dene
+# ====================== GERÇEK ORANLARI ÇEK ======================
+@st.cache_data(ttl=300)
+def get_real_odds():
+    url = "https://api.the-odds-api.com/v4/sports/soccer/odds"
+    params = {
+        "apiKey": api_key,
+        "regions": "eu",          # Avrupa bookie'leri (1xBet benzeri)
+        "markets": "h2h",
+        "oddsFormat": "decimal"
+    }
     try:
-        date_str = datetime.now().strftime("%Y-%m-%d")
-        url = f"https://v3.football.api-sports.io/fixtures?date={date_str}"
-        resp = requests.get(url, headers=headers, timeout=10)
-        data = resp.json().get('response', [])
-        if data:
-            maclar = []
-            for m in data[:12]:  # ilk 12 maç
-                home = m['teams']['home']['name']
-                away = m['teams']['away']['name']
-                maclar.append({
-                    "Maç": f"{home} vs {away}",
-                    "Lig": m['league']['name'],
-                    "Saat": m['fixture']['date'][11:16],
-                    "AI Ev (%)": round(53 + random.uniform(5, 20), 1),
-                    "1xBet Ev": round(random.uniform(1.45, 2.85), 2),
-                    "Beraberlik": round(random.uniform(3.2, 4.1), 2),
-                    "1xBet Deplasman": round(random.uniform(2.4, 3.8), 2),
-                    "Önerilen": random.choice(["Ev Kazanır", "2.5 Üst", "Deplasman Kazanır"])
-                })
-            return pd.DataFrame(maclar)
-    except:
-        pass
+        resp = requests.get(url, params=params, timeout=15)
+        if resp.status_code != 200:
+            st.error(f"API Hatası: {resp.status_code}")
+            return pd.DataFrame()
+        
+        data = resp.json()
+        matches = []
+        for item in data:
+            home = item['home_team']
+            away = item['away_team']
+            league = item.get('sport_title', 'Futbol')
+            commence = item['commence_time'][:16].replace("T", " ")
 
-    # API başarısız olursa kaliteli demo ver
-    st.info("📢 API bugün maç çekemedi (ücretsiz limit). Gerçekçi demo mod aktif.")
-    return pd.DataFrame([
-        {"Maç": "Galatasaray vs Fenerbahçe", "Lig": "Süper Lig", "Saat": "21:00", "AI Ev (%)": 62, "1xBet Ev": 2.10, "Beraberlik": 3.45, "1xBet Deplasman": 3.20, "Önerilen": "Ev Kazanır"},
-        {"Maç": "Beşiktaş vs Trabzonspor", "Lig": "Süper Lig", "Saat": "19:00", "AI Ev (%)": 57, "1xBet Ev": 2.35, "Beraberlik": 3.40, "1xBet Deplasman": 2.85, "Önerilen": "2.5 Üst"},
-        {"Maç": "Manchester City vs Arsenal", "Lig": "Premier League", "Saat": "22:00", "AI Ev (%)": 68, "1xBet Ev": 1.70, "Beraberlik": 4.10, "1xBet Deplasman": 4.50, "Önerilen": "Ev Kazanır"},
-        {"Maç": "Real Madrid vs Barcelona", "Lig": "La Liga", "Saat": "23:00", "AI Ev (%)": 54, "1xBet Ev": 2.25, "Beraberlik": 3.60, "1xBet Deplasman": 3.00, "Önerilen": "Ev Kazanır"},
-        {"Maç": "Bayern Münih vs Dortmund", "Lig": "Bundesliga", "Saat": "19:30", "AI Ev (%)": 65, "1xBet Ev": 1.85, "Beraberlik": 3.90, "1xBet Deplasman": 3.70, "Önerilen": "Ev Kazanır"},
-    ])
+            # En iyi oranları al (ilk bookmaker)
+            if not item.get('bookmakers'):
+                continue
+            outcomes = item['bookmakers'][0]['markets'][0]['outcomes']
+            ev = next((o['price'] for o in outcomes if o['name'] == home), 2.0)
+            draw = next((o['price'] for o in outcomes if o['name'] == "Draw"), 3.5)
+            dep = next((o['price'] for o in outcomes if o['name'] == away), 3.0)
 
-df = getir_maclari()
+            # AI tahmini (implied probability + ev avantajı)
+            ai_ev = round(100 / ev * 0.96, 1)   # Gerçekçi implied prob
+            ai_ev = min(78, max(48, ai_ev))     # Mantıklı aralık
 
-st.subheader("📅 Günün Maçları")
-st.dataframe(df, use_container_width=True, height=420)
+            matches.append({
+                "Maç": f"{home} vs {away}",
+                "Lig": league,
+                "Saat": commence,
+                "1xBet Ev": round(ev, 2),
+                "Beraberlik": round(draw, 2),
+                "1xBet Deplasman": round(dep, 2),
+                "AI Ev (%)": ai_ev,
+                "Önerilen": "Ev Kazanır" if ai_ev > 57 else "2.5 Üst"
+            })
+        return pd.DataFrame(matches[:15])   # İlk 15 maç
+    except Exception as e:
+        st.error(f"Bağlantı hatası: {str(e)}")
+        return pd.DataFrame()
 
-# ====================== KUPON ÜRETİCİ ======================
-st.subheader("🏆 Mantıklı Kupon Önerileri")
+df = get_real_odds()
+
+st.subheader("📅 Günün Gerçek Maçları + Oranlar (The Odds API)")
+
+if df.empty:
+    st.warning("Şu anda veri çekilemedi. Lütfen 1-2 dakika sonra yeniden dene.")
+else:
+    st.dataframe(df, use_container_width=True, height=420)
+
+# ====================== MANTIKLI KUPON ÜRETİCİ ======================
+st.subheader("🏆 Gerçek Oranlara Göre Kupon Önerileri")
 
 def uret_kupon(risk):
-    if df.empty:
+    if df.empty or len(df) < 3:
         return []
     iyi = df[df["AI Ev (%)"] >= 55].copy()
-    if len(iyi) < 3:
-        return []
-    
     kuponlar = []
     for _ in range(3):
         n = 3 if risk == "Düşük Risk" else 4 if risk == "Orta Risk" else random.randint(4,5)
@@ -90,21 +106,24 @@ with col1:
     if st.button("🟢 DÜŞÜK RİSK (Safe)", use_container_width=True):
         for k in uret_kupon("Düşük Risk"):
             with st.expander(f"🟢 Düşük Risk • {k['Maç Sayısı']} maç • Oran {k['Toplam Oran']}"):
-                for m in k["Maçlar"]: st.write("• " + m)
+                for m in k["Maçlar"]:
+                    st.write("• " + m)
                 st.success(f"**Kazanma Olasılığı: %{k['Kazanma Olasılığı (%)']}** | Beklenen Getiri: **{k['Beklenen Getiri']}**")
 
 with col2:
     if st.button("🟡 ORTA RİSK (En Mantıklı)", use_container_width=True):
         for k in uret_kupon("Orta Risk"):
             with st.expander(f"🟡 Orta Risk • {k['Maç Sayısı']} maç • Oran {k['Toplam Oran']}"):
-                for m in k["Maçlar"]: st.write("• " + m)
+                for m in k["Maçlar"]:
+                    st.write("• " + m)
                 st.success(f"**Kazanma Olasılığı: %{k['Kazanma Olasılığı (%)']}** | Beklenen Getiri: **{k['Beklenen Getiri']}**")
 
 with col3:
     if st.button("🔴 YÜKSEK RİSK (Yüksek Getiri)", use_container_width=True):
         for k in uret_kupon("Yüksek Risk"):
             with st.expander(f"🔴 Yüksek Risk • {k['Maç Sayısı']} maç • Oran {k['Toplam Oran']}"):
-                for m in k["Maçlar"]: st.write("• " + m)
+                for m in k["Maçlar"]:
+                    st.write("• " + m)
                 st.success(f"**Kazanma Olasılığı: %{k['Kazanma Olasılığı (%)']}** | Beklenen Getiri: **{k['Beklenen Getiri']}**")
 
-st.caption("EdgeBet AI v6.4 • Ücretsiz API + Gerçekçi Demo Yedek • Oranlar mantıklı hale getirildi")
+st.caption("EdgeBet AI v7.0 • Gerçek The Odds API + Gerçek Oranlar • Serhat için özel")
