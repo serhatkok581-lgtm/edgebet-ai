@@ -2,50 +2,23 @@ import streamlit as st
 import pandas as pd
 import requests
 import random
-from datetime import datetime
+from datetime import datetime, timedelta
 
-st.set_page_config(page_title="EdgeBet AI - Gelişmiş AI", layout="wide", page_icon="⚽")
+st.set_page_config(page_title="EdgeBet AI", layout="wide", page_icon="⚽")
 
 st.title("⚽ EdgeBet AI")
-st.markdown("**Gelişmiş Poisson AI • Gerçek Maçlar • Nesine/Tuttur Tarzı Oranlar • Profesyonel Kupon**")
+st.markdown("**Gelişmiş AI • Gerçek Maçlar + Ücretsiz Demo Yedek • Mantıklı Oranlar**")
 
 api_key = st.secrets.get("API_FOOTBALL_KEY")
-if not api_key:
-    st.error("❌ API Key bulunamadı!")
-    st.stop()
+headers = {'x-apisports-key': api_key} if api_key else None
 
-headers = {'x-apisports-key': api_key}
-
-# ====================== SAF PYTHON POISSON ======================
-def poisson_pmf(k, lam):
-    """Basit Poisson olasılık fonksiyonu (scipy olmadan)"""
-    if k < 0:
-        return 0.0
-    p = 1.0
-    for i in range(1, k + 1):
-        p *= lam / i
-    return p * (2.71828 ** -lam)
-
-def calculate_poisson_probs(home_lambda, away_lambda):
-    ev_win = 0
-    draw = 0
-    for h in range(0, 8):
-        for a in range(0, 8):
-            p = poisson_pmf(h, home_lambda) * poisson_pmf(a, away_lambda)
-            if h > a:
-                ev_win += p
-            elif h == a:
-                draw += p
-    dep_win = 1 - ev_win - draw
-    return round(ev_win * 100, 1), round(draw * 100, 1), round(dep_win * 100, 1)
-
-# ====================== GERÇEK MAÇLARI ÇEK ======================
+# ====================== GERÇEK MAÇ ÇEKME ======================
 @st.cache_data(ttl=180)
 def cek_maclari(tarih):
     date_str = tarih.strftime("%Y-%m-%d")
     url = f"https://v3.football.api-sports.io/fixtures?date={date_str}"
     try:
-        resp = requests.get(url, headers=headers, timeout=15)
+        resp = requests.get(url, headers=headers, timeout=12)
         data = resp.json().get('response', [])
         maclar = []
         for m in data:
@@ -54,50 +27,56 @@ def cek_maclari(tarih):
             league = m['league']['name']
             saat = m['fixture']['date'][11:16]
 
-            # Gelişmiş AI Poisson
-            home_lam = 1.65 if any(x in home for x in ["Galatasaray","Fenerbahçe","Beşiktaş","Real","City","Bayern"]) else 1.45
-            home_lam += random.uniform(0.2, 0.8)
-            away_lam = 1.15 + random.uniform(0.2, 0.6)
+            home_lam = 1.6 + random.uniform(0.2, 0.9)
+            away_lam = 1.1 + random.uniform(0.2, 0.7)
 
-            ev, ber, dep = calculate_poisson_probs(home_lam, away_lam)
-
-            # Nesine/Tuttur tarzı gerçekçi oranlar
-            ev_oran = round(100 / ev * 0.92, 2) if ev > 0 else 2.10
-            dep_oran = round(100 / dep * 0.92, 2) if dep > 0 else 3.20
+            ev = round(100 * (home_lam / (home_lam + away_lam + 0.3)), 1)
+            ber = round(100 * (0.28), 1)
+            dep = round(100 - ev - ber, 1)
 
             maclar.append({
                 "Maç": f"{home} vs {away}",
                 "Lig": league,
                 "Saat": saat,
                 "AI Ev (%)": ev,
-                "AI Ber (%)": ber,
-                "AI Dep (%)": dep,
-                "1xBet Ev": ev_oran,
-                "Beraberlik": round((3.4 + random.uniform(0.2, 0.6)), 2),
-                "1xBet Deplasman": dep_oran,
-                "Önerilen": "Ev Kazanır" if ev > 58 else "2.5 Üst" if (home_lam + away_lam) > 2.8 else "Deplasman Kazanır"
+                "1xBet Ev": round(1.45 + (100 - ev)/32, 2),
+                "Beraberlik": 3.65,
+                "1xBet Deplasman": round(2.75 + (ev - 50)/25, 2),
+                "Önerilen": "Ev Kazanır" if ev > 57 else "2.5 Üst"
             })
         return pd.DataFrame(maclar)
     except:
         return pd.DataFrame()
 
-bugun = datetime.now().date()
-df = cek_maclari(bugun)
+# Bugün + yarın + önceki gün dene
+tarihler = [datetime.now().date() + timedelta(days=i) for i in [-1, 0, 1]]
+df = pd.DataFrame()
+for t in tarihler:
+    df_temp = cek_maclari(t)
+    if not df_temp.empty:
+        df = df_temp
+        break
 
-st.subheader("📅 Günün Gerçek Maçları (API-Football)")
+# Eğer hâlâ maç yoksa → Ücretsiz demo verisi göster
+if df.empty:
+    st.warning("❌ API-Football ücretsiz limitinde bugün maç verisi çekilemedi. Ücretsiz demo mod aktif.")
+    df = pd.DataFrame([
+        {"Maç": "Galatasaray vs Fenerbahçe", "Lig": "Süper Lig", "Saat": "21:00", "AI Ev (%)": 64, "1xBet Ev": 2.05, "Beraberlik": 3.50, "1xBet Deplasman": 3.30, "Önerilen": "Ev Kazanır"},
+        {"Maç": "Beşiktaş vs Trabzonspor", "Lig": "Süper Lig", "Saat": "19:00", "AI Ev (%)": 58, "1xBet Ev": 2.35, "Beraberlik": 3.40, "1xBet Deplasman": 2.90, "Önerilen": "2.5 Üst"},
+        {"Maç": "Manchester City vs Arsenal", "Lig": "Premier League", "Saat": "22:00", "AI Ev (%)": 68, "1xBet Ev": 1.75, "Beraberlik": 4.10, "1xBet Deplasman": 4.40, "Önerilen": "Ev Kazanır"},
+        {"Maç": "Real Madrid vs Barcelona", "Lig": "La Liga", "Saat": "23:00", "AI Ev (%)": 55, "1xBet Ev": 2.20, "Beraberlik": 3.60, "1xBet Deplasman": 3.10, "Önerilen": "Ev Kazanır"},
+    ])
 
-if not df.empty:
-    st.dataframe(df, use_container_width=True, height=420)
-else:
-    st.warning("Bugün maç bulunamadı.")
+st.subheader("📅 Günün Maçları")
+st.dataframe(df, use_container_width=True, height=400)
 
-# ====================== KUPON ÜRETİCİ ======================
-st.subheader("🏆 Gelişmiş AI Kupon Önerileri")
+# ====================== KUPON ÖNERİLERİ ======================
+st.subheader("🏆 Mantıklı Kupon Önerileri")
 
 def uret_kupon(risk):
-    if df.empty or len(df) < 3:
-        return []
     iyi = df[df["AI Ev (%)"] >= 56].copy()
+    if len(iyi) < 3:
+        return []
     kuponlar = []
     for _ in range(3):
         if risk == "Düşük Risk":
@@ -106,13 +85,10 @@ def uret_kupon(risk):
             n = 4
         else:
             n = random.randint(4, 5)
-        
         secilen = iyi.sample(n)
         toplam_oran = round(secilen["1xBet Ev"].prod(), 2)
         olasilik = round((secilen["AI Ev (%)"] / 100).prod() * 100, 1)
-        
         mac_list = [f"{row['Maç']} → {row['Önerilen']} @ {row['1xBet Ev']}" for _, row in secilen.iterrows()]
-        
         kuponlar.append({
             "Risk": risk,
             "Maç Sayısı": n,
@@ -149,4 +125,4 @@ with col3:
                     st.write("• " + m)
                 st.success(f"**Kazanma Olasılığı: %{k['Kazanma Olasılığı (%)']}** | Beklenen Getiri: **{k['Beklenen Getiri']}**")
 
-st.caption("EdgeBet AI v6.2 • Poisson AI düzeltildi • Oranlar nesine/tuttur tarzı • Serhat için özel")
+st.caption("EdgeBet AI v6.3 • Ücretsiz mod + Demo yedek aktif • Oranlar mantıklı hale getirildi")
